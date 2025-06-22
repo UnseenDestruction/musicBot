@@ -1,9 +1,8 @@
 /* eslint-disable */
-
 "use client";
 
-import { useState, useEffect } from "react";
-import { Send, Mic, MicOff } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Mic, MicOff } from "lucide-react";
 import axios from "axios";
 
 type Message = {
@@ -34,92 +33,138 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
     { text: "Hello! How can I assist you today?", sender: "bot" }
   ]);
-  const [input, setInput] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [recognition, setRecognition] = useState<SpeechRecognition | null>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
+
+ useEffect(() => {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    const recog = new SpeechRecognition();
+    recog.continuous = false;
+    recog.interimResults = false;
+    recog.lang = "en-US";
+
+    let silenceTimer: NodeJS.Timeout;
+
+    recog.onstart = () => {
+      setIsListening(true);
+
+      silenceTimer = setTimeout(() => {
+        recog.stop(); 
+        console.log("Stopped due to silence");
+      }, 20000); 
+    };
+
+    recog.onresult = async (event: any) => {
+      clearTimeout(silenceTimer); 
+      const transcript = event.results[0][0].transcript;
+      await sendMessage(transcript);
+      recog.stop(); 
+    };
+
+    recog.onend = () => {
+      setIsListening(false);
+      clearTimeout(silenceTimer); 
+    };
+
+    recog.onerror = (e: any) => {
+      console.error("Speech error:", e);
+      setIsListening(false);
+      clearTimeout(silenceTimer);
+    };
+
+    setRecognition(recog);
+  } else {
+    alert("Speech recognition is not supported on this browser.");
+  }
+}, []);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recog = new SpeechRecognition();
-        recog.continuous = false;
-        recog.interimResults = false;
-        recog.lang = "en-US";
-
-        recog.onstart = () => setIsListening(true);
-        recog.onend = () => setIsListening(false);
-        recog.onresult = (event: any) => {
-          const transcript = event.results[0][0].transcript;
-          setInput(transcript);
-          sendMessage(transcript);
-        };
-
-        setRecognition(recog);
-      }
+    if (chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
-  }, []);
+  }, [messages]);
 
   const startListening = () => {
-    if (recognition) {
-      recognition.start();
+    if (recognition) recognition.start();
+  };
+
+  const stopListening = () => {
+    if (recognition) recognition.stop();
+  };
+
+  const toggleListening = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
     }
   };
 
-  const sendMessage = async (messageText?: string) => {
-    const textToSend = messageText || input;
-    if (!textToSend.trim()) return;
-    const userMessage: Message = { text: textToSend, sender: "user" };
+  const sendMessage = async (text: string) => {
+    if (!text.trim()) return;
+    const userMessage: Message = { text, sender: "user" };
+    console.log(userMessage)
     setMessages((prev) => [...prev, userMessage]);
-    setInput("");
 
     try {
-      const botResponses = await fetchBotResponse(textToSend);
+      const botResponses = await fetchBotResponse(text);
       setMessages((prev) => [...prev, ...botResponses]);
     } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        { text: "Something went wrong. Please try again.", sender: "bot" }
+      ]);
     }
   };
 
   const fetchBotResponse = async (userInput: string): Promise<Message[]> => {
     try {
-        const response = await axios.post("/api/chat", { userMessage: userInput });
-        const { content, spotifyLinks } = response.data;
+      const response = await axios.post("/api/chat", { userMessage: userInput });
+      const { content, spotifyLinks } = response.data;
 
-        let botMessages: Message[] = [];
+      let botMessages: Message[] = [];
 
-        if (Array.isArray(content)) {
-            botMessages = content.map((song: { title: string, artist: string }) => ({
-                text: `${song.title} - ${song.artist}`,
-                sender: "bot",
-                spotifyLink: spotifyLinks || []
-            }));
-        } else {
-            botMessages = [
-                {
-                    text: content,
-                    sender: "bot",
-                    spotifyLink: spotifyLinks || []
-                }
-            ];
-        }
+      if (Array.isArray(content)) {
+        botMessages = content.map((song: { title: string; artist: string }) => ({
+          text: `${song.title} - ${song.artist}`,
+          sender: "bot",
+          spotifyLink: spotifyLinks || []
+        }));
+      } else {
+        botMessages = [
+          {
+            text: content,
+            sender: "bot",
+            spotifyLink: spotifyLinks || []
+          }
+        ];
+      }
 
-        return botMessages;
+      return botMessages;
     } catch (error) {
-        return [{ text: "Sorry, I am having trouble responding right now.", sender: "bot" }];
+      return [
+        {
+          text: "Sorry, I am having trouble responding right now.",
+          sender: "bot"
+        }
+      ];
     }
-};
-
+  };
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-b from-purple-100 to-purple-300 text-gray-900 p-4">
-      <div className=" overflow-y-auto p-4 rounded-lg relative h-[84vh]">
+    <div className="flex flex-col h-screen bg-white text-gray-900   overflow-none">
+      <div
+        ref={chatRef}
+        className="overflow-y-auto p-4 rounded-lg relative h-[84vh] bg-gray-50  w-screen"
+      >
         {messages.map((msg, index) => (
           <div
             key={index}
             className={`p-3 my-2 rounded-xl w-fit max-w-xs ${
               msg.sender === "user"
-                ? "bg-white text-black self-end ml-auto shadow-md"
+                ? "bg-black text-white self-end ml-auto shadow-md"
                 : "bg-purple-500 text-white shadow-md"
             }`}
           >
@@ -140,42 +185,35 @@ export default function Home() {
             ) : (
               <p>{msg.text}</p>
             )}
-{msg.spotifyLink && msg.spotifyLink.length > 0 && (
-  <div className="mt-2">
-   {msg.spotifyLink && msg.spotifyLink.length > 0 && (
-  <div className="mt-2">
-    {msg.spotifyLink.map((song, idx) => (
-      <div key={idx} className="mb-2">
-        <p>{song.song}</p>
-        {song.iframe && <div dangerouslySetInnerHTML={{ __html: song.iframe }} />}
-      </div>
-    ))}
-  </div>
-)}
 
-  </div>
-)}
+            {msg.spotifyLink && msg.spotifyLink.length > 0 && (
+              <div className="mt-2">
+                {msg.spotifyLink.map((song, idx) => (
+                  <div key={idx} className="mb-2">
+                    {song.iframe && (
+                      <div
+                        className="mt-1"
+                        dangerouslySetInnerHTML={{ __html: song.iframe }}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
-      <div className="flex fixed bottom-[4%] left-[5%] w-[90vw] items-center gap-2 p-3 rounded-full bg-white shadow-lg">
+      <div className="flex justify-center items-center mt-2">
         <button
-          onClick={startListening}
-          className={`p-3 rounded-full ${isListening ? "bg-red-500" : "bg-purple-500"}`}
+          onClick={toggleListening}
+          className={`p-5 rounded-full ${isListening ? "bg-red-500" : "bg-purple-500"}`}
         >
-          {isListening ? <MicOff size={24} color="white" /> : <Mic size={24} color="white" />}
-        </button>
-        <input
-          type="text"
-          className="flex-1 p-3 border-none bg-transparent text-black outline-none"
-          placeholder="Tap icon to talk or simply text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-        />
-        <button className="p-3 bg-purple-500 rounded-full text-white" onClick={() => sendMessage()}>
-          <Send size={24} />
+          {isListening ? (
+            <MicOff size={30} color="white" />
+          ) : (
+            <Mic size={40} color="white" />
+          )}
         </button>
       </div>
     </div>
